@@ -113,11 +113,14 @@ df = load_accounts()
 
 def find_account_by_row(row):
     hp = clean_value(
-        row.get("חפ_גוף", "")
+        row.get("חפ_גוף", row.get("מספר ח.פ", ""))
     )
 
     fund_number = clean_value(
-        row.get("מספר קופה בקובץ", "")
+        row.get(
+            "מספר קופה בקובץ",
+            row.get("מספר קופה / קרן", ""),
+        )
     )
 
     original_name = clean_value(
@@ -132,20 +135,60 @@ def find_account_by_row(row):
 
     matches = pd.DataFrame()
 
-    # התאמה לפי ח.פ ומספר קופה
+    # 1. התאמה מלאה: ח.פ + מספר קופה
     if hp and fund_number:
         matches = df[
             (df["חפ_נקי"] == hp)
             & (df["מספר_קופה_נקי"] == fund_number)
         ]
+    # אם לא נמצאה התאמה, נסה להוסיף אפס בסוף מספר הקופה
+    if matches.empty and hp and fund_number:
+        fund_number_with_zero = fund_number + "0"
 
-    # התאמה מדויקת לפי שם
+        matches = df[
+            (df["חפ_נקי"] == hp)
+            & (df["מספר_קופה_נקי"] == fund_number_with_zero)
+        ]
+
+    # 2. יש ח.פ אבל אין מספר קופה
+    # מחפשים רשומה של אותו גוף שגם באקסל אין לה מספר קופה
+    if matches.empty and hp and not fund_number:
+        hp_matches = df[df["חפ_נקי"] == hp]
+
+        empty_fund_number_matches = hp_matches[
+            hp_matches["מספר_קופה_נקי"] == ""
+        ]
+
+        if len(empty_fund_number_matches) == 1:
+            matches = empty_fund_number_matches
+
+        # אם לח.פ כולו קיימת רק רשומה אחת באקסל
+        elif len(hp_matches) == 1:
+            matches = hp_matches
+
+    # 3. התאמה מדויקת לפי שם הקופה
     if matches.empty and original_name:
         normalized_name = normalize_text(original_name)
 
         matches = df[
             df["שם_קופה_נקי"] == normalized_name
         ]
+
+    # 4. התאמה חלקית לפי שם — רק אם נמצאה תוצאה יחידה
+    if matches.empty and original_name:
+        normalized_name = normalize_text(original_name)
+
+        if normalized_name:
+            partial_matches = df[
+                df["שם_קופה_נקי"].apply(
+                    lambda excel_name:
+                    normalized_name in excel_name
+                    or excel_name in normalized_name
+                )
+            ]
+
+            if len(partial_matches) == 1:
+                matches = partial_matches
 
     if matches.empty:
         return pd.Series({
@@ -172,6 +215,10 @@ def find_account_by_row(row):
         "חשבון": match["חשבון_מלא"],
         "מספר קופה": clean_value(
             match["מספר קופה / קרן"]
+        ) or "ללא מספר קופה",
+        "סטטוס התאמה": (
+            "התאמה לפי ח.פ"
+            if hp and not fund_number
+            else "התאמה מלאה"
         ),
-        "סטטוס התאמה": "התאמה מלאה",
     })
